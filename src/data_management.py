@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from PIL import Image
 import shutil
+import torchvision.transforms as transforms
+import torch
 
 def load_data():
     project_root = Path(__file__).resolve().parent.parent
@@ -43,21 +45,36 @@ def load_data():
     print(f"Dataset ready. Root folder with train/test/val is: {data_root}")
     return data_root
 
-def preprocess_image(image_path: Path, target_size: tuple[int, int]) -> Image.Image:
-    img = Image.open(image_path).convert('RGB')
-    
-    original_width, original_height = img.size
-    
-    if original_width == original_height:
-        return img.resize(target_size, Image.Resampling.LANCZOS)
+class ResizeAndPad: #class to be callable from compose
+    def __init__(self, target_size: tuple[int, int]):
+        self.target_size = target_size
 
-    max_side = max(original_width, original_height)
-    padded_img = Image.new('RGB', (max_side, max_side), (0, 0, 0))
+    def __call__(self, img: Image.Image) -> Image.Image:
+        img = img.convert('RGB')
+        original_width, original_height = img.size
+        
+        if original_width == original_height:
+            return img.resize(self.target_size, Image.Resampling.LANCZOS)
+
+        max_side = max(original_width, original_height)
+        padded_img = Image.new('RGB', (max_side, max_side), (0, 0, 0))
+        
+        paste_x = (max_side - original_width) // 2
+        paste_y = (max_side - original_height) // 2
+        padded_img.paste(img, (paste_x, paste_y))
+        
+        resized_img = padded_img.resize(self.target_size, Image.Resampling.LANCZOS)
+        
+        return resized_img
+
+def get_transforms() -> transforms.Compose:
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
     
-    paste_x = (max_side - original_width) // 2
-    paste_y = (max_side - original_height) // 2
-    padded_img.paste(img, (paste_x, paste_y))
+    target_size = (224, 224)
     
-    resized_img = padded_img.resize(target_size, Image.Resampling.LANCZOS)
-    
-    return resized_img
+    return transforms.Compose([
+        ResizeAndPad(target_size),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std)
+    ])
