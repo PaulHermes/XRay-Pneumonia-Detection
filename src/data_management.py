@@ -5,6 +5,8 @@ from PIL import Image
 import shutil
 import torchvision.transforms as transforms
 import torch
+from . import hyperparameters as hp
+from collections import defaultdict
 
 def load_data():
     project_root = Path(__file__).resolve().parent.parent
@@ -43,7 +45,17 @@ def load_data():
         data_root = nested_dir
 
     print(f"Dataset ready. Root folder with train/test/val is: {data_root}")
-    return data_root
+    
+    # get class counts for the training split for weighted sampling
+    train_normal_count = len(list((data_root / 'train' / 'NORMAL').iterdir()))
+    train_pneumonia_count = len(list((data_root / 'train' / 'PNEUMONIA').iterdir()))
+    
+    class_counts = {
+        'NORMAL': train_normal_count,
+        'PNEUMONIA': train_pneumonia_count
+    }
+    
+    return {'data_root': data_root, 'class_counts': class_counts}
 
 class ResizeAndPad: #class to be callable from compose
     def __init__(self, target_size: tuple[int, int]):
@@ -67,14 +79,108 @@ class ResizeAndPad: #class to be callable from compose
         
         return resized_img
 
-def get_transforms() -> transforms.Compose:
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
+def get_train_transforms() -> transforms.Compose:
+    transform_params = hp.TRANSFORM_CONFIGS.get(hp.MODEL_SOURCE, hp.TRANSFORM_CONFIGS["imagenet"])
+    mean = transform_params["MEAN"]
+    std = transform_params["STD"]
     
-    target_size = (224, 224)
+    # build augmentation list
+    aug_list = []
+    if hp.AUGMENTATION_CONFIG.get("enabled", False):
+        cfg = hp.AUGMENTATION_CONFIG
+        if cfg.get("rotation", {}).get("enabled", False):
+            aug_list.append(transforms.RandomRotation(degrees=cfg["rotation"]["degrees"]))
+        if cfg.get("affine", {}).get("enabled", False):
+            aug_list.append(transforms.RandomAffine(
+                degrees=0, # Rotation is handled separately
+                translate=cfg["affine"]["translate"],
+                scale=cfg["affine"]["scale"]
+            ))
+        if cfg.get("horizontal_flip", {}).get("enabled", False):
+            aug_list.append(transforms.RandomHorizontalFlip(p=cfg["horizontal_flip"]["p"]))
+        if cfg.get("color_jitter", {}).get("enabled", False):
+            aug_list.append(transforms.ColorJitter(
+                brightness=cfg["color_jitter"]["brightness"],
+                contrast=cfg.get("color_jitter", {}).get("contrast", 0) # Contrast is optional
+            ))
+
+    # Base transforms
+    base_transforms = [
+        ResizeAndPad(hp.TARGET_IMAGE_SIZE),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std)
+    ]
     
+    # Combine augmentations with base transforms
+    return transforms.Compose(aug_list + base_transforms)
+
+def get_val_transforms() -> transforms.Compose:
+    transform_params = hp.TRANSFORM_CONFIGS.get(hp.MODEL_SOURCE, hp.TRANSFORM_CONFIGS["imagenet"])
+    mean = transform_params["MEAN"]
+    std = transform_params["STD"]
+
     return transforms.Compose([
-        ResizeAndPad(target_size),
+        ResizeAndPad(hp.TARGET_IMAGE_SIZE),
         transforms.ToTensor(),
         transforms.Normalize(mean=mean, std=std)
     ])
+
+class PneumoniaDataset(torch.utils.data.Dataset):
+    def __init__(self, root_dir, transform=None, split='train'):
+        self.root_dir = Path(root_dir)
+        self.transform = transform
+        self.split = split
+        self.classes = ['NORMAL', 'PNEUMONIA']
+        self.class_to_idx = {'NORMAL': 0, 'PNEUMONIA': 1}
+        self.samples = self._make_dataset()
+
+    def _make_dataset(self):
+        instances = []
+        for class_name in self.classes:
+            class_dir = self.root_dir / self.split / class_name
+            if not class_dir.is_dir():
+                continue
+            for img_path in class_dir.iterdir():
+                if img_path.suffix.lower() == '.jpeg':
+                    label = self.class_to_idx[class_name]
+                    instances.append((str(img_path), label))
+        return instances
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        img_path, label = self.samples[idx]
+        img = Image.open(img_path).convert('RGB')
+        if self.transform:
+            img = self.transform(img)
+        return img, label
+
+def get_weighted_sampler(dataset: PneumoniaDataset) -> torch.utils.data.WeightedRandomSampler:
+    class_counts = defaultdict(int)
+    for _, label in dataset.samples:
+        class_counts[label] += 1
+
+    num_samples = len(dataset)
+    weights = [0] * num_samples
+    
+    class_weights = {
+        0: num_samples / (2 * class_counts[0]), # Weight for NORMAL
+        1: num_samples / (2 * class_counts[1])  # Weight for PNEUMONIA
+    }
+
+    for idx, (_, label) in enumerate(dataset.samples):
+        weights[idx] = class_weights[label]
+            
+    sampler = torch.utils.data.WeightedRandomSampler(
+        torch.DoubleTensor(weights),
+        num_samples=num_samples,
+        replacement=True
+    )
+    return sampler
+
+def create_training_dataset_with_sampler(data_root: Path):
+    train_transforms = get_train_transforms()
+    train_dataset = PneumoniaDataset(data_root, transform=train_transforms, split='train')
+    train_sampler = get_weighted_sampler(train_dataset)
+    return train_dataset, train_sampler
