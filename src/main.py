@@ -22,7 +22,7 @@ from src.data_management import (
 
 model_results = []
 
-
+#test
 def train_one_epoch(model, dataloader, criterion, optimizer, device):
     model.train()
     running_loss, running_corrects = 0.0, 0
