@@ -1,28 +1,27 @@
 import os
 from pathlib import Path
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# --- PROJECT IMPORTS ---
 from src import hyperparameters as hp
+from src.data_management import (
+  load_data,
+  get_train_transforms,
+  get_val_transforms,
+  create_training_dataset_with_sampler,
+  PneumoniaDataset,
+)
 from src.hyperparameters import (
-    MODEL_ARCH, MODEL_SOURCE, PRETRAINED, NUM_CLASSES,
-    BATCH_SIZE, LEARNING_RATE, NUM_EPOCHS
+  PRETRAINED, NUM_CLASSES,
+  BATCH_SIZE, LEARNING_RATE, NUM_EPOCHS
 )
 from src.model import build_model
-from src.data_management import (
-    load_data,
-    get_train_transforms,
-    get_val_transforms,
-    create_training_dataset_with_sampler,
-    PneumoniaDataset,
-)
 
 model_results = []
 
-#test
 def train_one_epoch(model, dataloader, criterion, optimizer, device):
     model.train()
     running_loss, running_corrects = 0.0, 0
@@ -134,7 +133,6 @@ def train_and_save(model_save_path: Path, data_root: Path):
             print(f"Early Stopping triggered after {epoch+1} epochs!")
             break
 
-    # save results
     model_results.append({
         "arch": hp.MODEL_ARCH,
         "source": hp.MODEL_SOURCE,
@@ -160,7 +158,6 @@ def main():
     model_configs = [
         ("simple_cnn", "simple_cnn"),
         ("resnet50", "imagenet"),
-        ("resnet50", "hf_pretrained"),  # Your HuggingFace model path is used in build_model()
     ]
 
     # ========== Train each model ==========
@@ -169,11 +166,9 @@ def main():
         print(f"   Training Model: {arch}  |  Source: {source}")
         print("==============================================")
 
-        # Update global hyperparameters dynamically
         hp.MODEL_ARCH = arch
         hp.MODEL_SOURCE = source
 
-        # Call training
         train_and_save(model_save_path, data_root)
 
 
