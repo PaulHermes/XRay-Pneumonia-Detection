@@ -38,6 +38,7 @@ def plot_learning_curve_for_model(model_arch, model_source, data_root, device, s
         criterion=torch.nn.CrossEntropyLoss,
         optimizer=torch.optim.Adam,
         optimizer__lr=hp.LEARNING_RATE,
+        batch_size=hp.BATCH_SIZE,
         train_split=None,
         verbose=0,
         device=device,
