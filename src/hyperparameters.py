@@ -6,16 +6,11 @@ PRETRAINED = True # Use pretrained weights from source
 NUM_CLASSES = 2
 
 # Training Hyperparameters
-BATCH_SIZE = 32
+BATCH_SIZE = 64 # can probably try to go to 128 since that is what Learning Curve defaults to
 LEARNING_RATE = 0.001
 NUM_EPOCHS = 10
 optimizer_params = {
     "weight_decay": 0.0001
-}
-scheduler_params = {
-    "mode": "min",
-    "factor": 0.1,
-    "patience": 5
 }
 
 # Data Hyperparameters
@@ -35,7 +30,6 @@ TRANSFORM_CONFIGS = {
     }
 }
 
-#zuerst ohne (impact schauen)
 # Data Augmentation Hyperparameters
 AUGMENTATION_CONFIG = {
     "enabled": True,
@@ -49,6 +43,17 @@ AUGMENTATION_CONFIG = {
 EARLY_STOPPING_CONFIG = {
     "enabled": False, # disabled for now since we want the full plots for better understanding
     "patience": 3,
+}
+
+# CAM Hyperparameters
+CAM = {
+    "USE_CAM": True,
+    "TARGET_LAYER_MAP": {
+        "simple_cnn": "features[3]", # Corresponds to the last Conv2d layer
+        "resnet50": "layer4[2].conv3"
+    },
+    "OUTPUT_DIR": "cam_visualizations",
+    "NUM_IMAGES": 10
 }
 
 

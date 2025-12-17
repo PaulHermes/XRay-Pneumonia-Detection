@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from src import hyperparameters as hp
 from src.data_management import (load_data, get_train_transforms, get_val_transforms, create_training_dataset_with_sampler, PneumoniaDataset)
-from src.evaluation import plot_learning_curve_for_model, plot_training_history
+from src.evaluation import plot_learning_curve_for_model, plot_training_history, generate_cam_visualizations
 from src.hyperparameters import (PRETRAINED, NUM_CLASSES, BATCH_SIZE, LEARNING_RATE, NUM_EPOCHS)
 from src.model import build_model
 
@@ -232,6 +232,13 @@ def main():
   for arch, source in model_configs:
     plot_learning_curve_for_model(arch, source, data_root, device, scoring_metrics)
 
+  # ========== Generate CAM Visualizations ==========
+  if hp.CAM.get("USE_CAM", False):
+    print("\n==============================================")
+    print("      Generating CAM Visualizations")
+    print("==============================================")
+    for arch, source in model_configs:
+      generate_cam_visualizations(arch, source, data_root, device)
 
 if __name__ == "__main__":
   main()

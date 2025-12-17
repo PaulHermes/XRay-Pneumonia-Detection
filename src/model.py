@@ -6,20 +6,21 @@ from . import hyperparameters as hp
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes: int = hp.NUM_CLASSES):
         super(SimpleCNN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, padding=1)
-        self.relu1 = nn.ReLU()
-        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
-        self.relu2 = nn.ReLU()
-        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(16, 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
         self.flatten = nn.Flatten()
         # For an input of 224x224, after two 2x2 pooling layers, the size will be 224 / 2 / 2 = 56.
         # So the flattened size will be 32 * 56 * 56.
         self.fc1 = nn.Linear(32 * 56 * 56, num_classes)
 
     def forward(self, x):
-        x = self.pool1(self.relu1(self.conv1(x)))
-        x = self.pool2(self.relu2(self.conv2(x)))
+        x = self.features(x)
         x = self.flatten(x)
         x = self.fc1(x)
         return x

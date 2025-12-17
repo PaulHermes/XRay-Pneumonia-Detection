@@ -21,6 +21,10 @@ from src import hyperparameters as hp
 from src.model import build_model
 from src.data_management import PneumoniaDataset, get_train_transforms
 
+import os
+from src.data_management import get_val_transforms
+from src.cam import generate_cam_image
+
 def plot_learning_curve_for_model(model_arch, model_source, data_root, device, scoring_metrics):
     print(f"Generating learning curves for {model_arch}/{model_source}...")
 
@@ -128,3 +132,69 @@ def plot_training_history(history, model_arch, model_source):
         print(f"  - History plot for '{key}' saved to {plot_path}")
         plt.close()
 
+def generate_cam_visualizations(model_arch, model_source, data_root, device):
+    print(f"\nGenerating CAM visualizations for {model_arch}/{model_source}...")
+
+    # 1. Setup output directory
+    output_dir = hp.CAM["OUTPUT_DIR"]
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 2. Build and load the best model
+    hp.MODEL_ARCH = model_arch
+    hp.MODEL_SOURCE = model_source
+    model = build_model(pretrained=False, num_classes=hp.NUM_CLASSES) # pretrained=False because we load local weights
+    model_path = f'models/best_model_{model_arch}_{model_source}.pth'
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
+    model.eval()
+
+    # 3. Get validation data
+    val_transforms = get_val_transforms()
+    val_dataset = PneumoniaDataset(data_root, transform=val_transforms, split='val')
+    
+    # 4. Get target layer
+    target_layer_name = hp.CAM["TARGET_LAYER_MAP"].get(model_arch)
+    if not target_layer_name:
+        print(f"Warning: No target layer specified for model '{model_arch}' in hyperparameters. Skipping CAM generation.")
+        return
+        
+    # Access the layer using its string name
+    try:
+        target_layer = model
+        for name in target_layer_name.split('.'):
+            if name.endswith(']'):
+                name, index = name[:-1].split('[')
+                target_layer = getattr(target_layer, name)
+                target_layer = target_layer[int(index)]
+            else:
+                target_layer = getattr(target_layer, name)
+    except AttributeError:
+        print(f"Error: Could not find target layer '{target_layer_name}' in model '{model_arch}'. Skipping CAM generation.")
+        return
+
+    # 5. Generate and save CAM images
+    num_images_per_class = hp.CAM["NUM_IMAGES"] // 2
+    
+    class_indices = {0: [], 1: []}
+    for i in range(len(val_dataset)):
+        _, label = val_dataset[i]
+        if len(class_indices[label]) < num_images_per_class:
+            class_indices[label].append(i)
+        if all(len(v) == num_images_per_class for v in class_indices.values()):
+            break
+            
+    image_indices = class_indices[0] + class_indices[1]
+
+    for i, img_idx in enumerate(image_indices):
+        input_tensor, label = val_dataset[img_idx]
+        input_tensor = input_tensor.to(device)
+
+        overlay, pred_idx = generate_cam_image(model, target_layer, input_tensor)
+
+        actual_label = "Pneumonia" if label == 1 else "Normal"
+        pred_label = "Pneumonia" if pred_idx == 1 else "Normal"
+        
+        filename = f"{model_arch}_{model_source}_img{i}_actual-{actual_label}_pred-{pred_label}.png"
+        save_path = os.path.join(output_dir, filename)
+        overlay.save(save_path)
+        print(f"  - Saved CAM visualization to {save_path}")
