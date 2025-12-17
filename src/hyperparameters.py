@@ -38,11 +38,17 @@ TRANSFORM_CONFIGS = {
 #zuerst ohne (impact schauen)
 # Data Augmentation Hyperparameters
 AUGMENTATION_CONFIG = {
-    "enabled": False,
+    "enabled": True,
     "rotation": {"enabled": True, "degrees": 5},
     "affine": {"enabled": True, "translate": (0.05, 0.05), "scale": (0.95, 1.05)},
-    "horizontal_flip": {"enabled": True, "p": 0.5},
+    "horizontal_flip": {"enabled": False, "p": 0.5},
     "color_jitter": {"enabled": True, "brightness": 0.1, "contrast": 0.1},
+}
+
+# Early Stopping Hyperparameters
+EARLY_STOPPING_CONFIG = {
+    "enabled": False, # disabled for now since we want the full plots for better understanding
+    "patience": 3,
 }
 
 

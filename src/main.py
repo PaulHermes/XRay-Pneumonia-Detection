@@ -1,22 +1,40 @@
 import os
 from pathlib import Path
+from collections import defaultdict
 
 import torch
 import torch.nn as nn
+from sklearn.metrics import recall_score, precision_score, f1_score, accuracy_score, make_scorer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src import hyperparameters as hp
 from src.data_management import (load_data, get_train_transforms, get_val_transforms, create_training_dataset_with_sampler, PneumoniaDataset)
+from src.evaluation import plot_learning_curve_for_model, plot_training_history
 from src.hyperparameters import (PRETRAINED, NUM_CLASSES, BATCH_SIZE, LEARNING_RATE, NUM_EPOCHS)
 from src.model import build_model
 
 model_results = []
 
+def calculate_metrics(labels, preds):
+    accuracy = accuracy_score(labels, preds)
+    precision = precision_score(labels, preds, average='macro', zero_division=0)
+    recall = recall_score(labels, preds, average='macro', zero_division=0)
+    f1 = f1_score(labels, preds, average='macro', zero_division=0)
+    specificity = recall_score(labels, preds, pos_label=0, average='binary', zero_division=0)
+    return {
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "specificity": specificity
+    }
+
 
 def train_one_epoch(model, dataloader, criterion, optimizer, device):
   model.train()
-  running_loss, running_corrects = 0.0, 0
+  running_loss = 0.0
+  all_preds, all_labels = [], []
 
   progress_bar = tqdm(dataloader, desc="Training", leave=False)
 
@@ -36,20 +54,23 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device):
 
     _, preds = torch.max(outputs, 1)
     running_loss += loss.item() * inputs.size(0)
-    running_corrects += torch.sum(preds == labels.data)
+    
+    all_preds.extend(preds.cpu().numpy())
+    all_labels.extend(labels.cpu().numpy())
 
     progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
 
-  dataset_size = len(dataloader.dataset)
-  epoch_loss = running_loss / dataset_size
-  epoch_acc = running_corrects.double().item() / dataset_size
-  return epoch_loss, epoch_acc
+  epoch_loss = running_loss / len(dataloader.dataset)
+  metrics = calculate_metrics(all_labels, all_preds)
+  metrics["loss"] = epoch_loss
+  return metrics
 
 
 def validate(model, dataloader, criterion, device):
   model.eval()
-  running_loss, running_corrects = 0.0, 0
-
+  running_loss = 0.0
+  all_preds, all_labels = [], []
+  
   progress_bar = tqdm(dataloader, desc="Validating", leave=False)
 
   with torch.no_grad():
@@ -64,13 +85,14 @@ def validate(model, dataloader, criterion, device):
       _, preds = torch.max(outputs, 1)
 
       running_loss += loss.item() * inputs.size(0)
-      running_corrects += torch.sum(preds == labels.data)
+      all_preds.extend(preds.cpu().numpy())
+      all_labels.extend(labels.cpu().numpy())
       progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
 
-  dataset_size = len(dataloader.dataset)
-  val_loss = running_loss / dataset_size
-  val_acc = running_corrects.double().item() / dataset_size
-  return val_loss, val_acc
+  epoch_loss = running_loss / len(dataloader.dataset)
+  metrics = calculate_metrics(all_labels, all_preds)
+  metrics["loss"] = epoch_loss
+  return metrics
 
 
 def train_and_save(model_save_path: Path, data_root: Path):
@@ -79,15 +101,10 @@ def train_and_save(model_save_path: Path, data_root: Path):
 
   model = build_model(pretrained=PRETRAINED, num_classes=NUM_CLASSES).to(device)
 
-  train_transforms = get_train_transforms()
-  val_transforms = get_val_transforms()
-
   train_dataset, train_sampler = create_training_dataset_with_sampler(data_root)
-  val_dataset = PneumoniaDataset(data_root, transform=val_transforms,
-                                 split="val")
+  val_dataset = PneumoniaDataset(data_root, transform=get_val_transforms(), split="val")
 
-  train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE,
-                            sampler=train_sampler)
+  train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=train_sampler)
   val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
   criterion = nn.CrossEntropyLoss()
@@ -95,48 +112,63 @@ def train_and_save(model_save_path: Path, data_root: Path):
 
   best_val_acc = 0.0
   best_val_loss = float("inf")
+  
+  history = defaultdict(list)
 
-  EARLY_STOPPING_PATIENCE = 3
   epochs_without_improvement = 0
+  early_stopped = False
 
   for epoch in range(NUM_EPOCHS):
     print(f"\nEpoch {epoch + 1}/{NUM_EPOCHS}")
 
-    train_loss, train_acc = train_one_epoch(model, train_loader, criterion,
-                                            optimizer, device)
-    val_loss, val_acc = validate(model, val_loader, criterion, device)
+    train_metrics = train_one_epoch(model, train_loader, criterion, optimizer, device)
+    val_metrics = validate(model, val_loader, criterion, device)
 
-    print(f" Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f}")
-    print(f" Val   Loss: {val_loss:.4f} | Val   Acc: {val_acc:.4f}")
+    # Store metrics
+    for key, value in train_metrics.items():
+        history[f"train_{key}"].append(value)
+    for key, value in val_metrics.items():
+        history[f"val_{key}"].append(value)
+
+    print(f" Train Loss: {train_metrics['loss']:.4f} | Train Acc: {train_metrics['accuracy']:.4f}")
+    print(f" Val   Loss: {val_metrics['loss']:.4f} | Val   Acc: {val_metrics['accuracy']:.4f}")
 
     # Save best model
-    if val_acc > best_val_acc:
-      best_val_acc = val_acc
-      os.makedirs(model_save_path, exist_ok=True)
+    if val_metrics['accuracy'] > best_val_acc:
+      best_val_acc = val_metrics['accuracy']
       save_path = model_save_path / f"best_model_{hp.MODEL_ARCH}_{hp.MODEL_SOURCE}.pth"
       torch.save(model.state_dict(), save_path)
       print(f" Saved new best model → {save_path}")
 
     # Early Stopping
-    if val_loss < best_val_loss:
-      best_val_loss = val_loss
-      epochs_without_improvement = 0
-    else:
-      epochs_without_improvement += 1
+    if hp.EARLY_STOPPING_CONFIG.get("enabled", False):
+        if val_metrics['loss'] < best_val_loss:
+            best_val_loss = val_metrics['loss']
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
 
-    if epochs_without_improvement >= EARLY_STOPPING_PATIENCE:
-      print(f"Early Stopping triggered after {epoch + 1} epochs!")
-      break
+        if epochs_without_improvement >= hp.EARLY_STOPPING_CONFIG["patience"]:
+            print(f"Early Stopping triggered after {epoch + 1} epochs!")
+            early_stopped = True
+            break
+  
+  if not hp.EARLY_STOPPING_CONFIG.get("enabled", False):
+      early_stopped = False
+  else:
+      early_stopped = epochs_without_improvement >= hp.EARLY_STOPPING_CONFIG["patience"]
 
   model_results.append({
     "arch": hp.MODEL_ARCH,
     "source": hp.MODEL_SOURCE,
     "val_acc": best_val_acc,
     "val_loss": best_val_loss,
-    "early_stopped": epochs_without_improvement >= EARLY_STOPPING_PATIENCE
+    "early_stopped": early_stopped
   })
 
   print("\nTraining finished.")
+  
+  plot_training_history(history, hp.MODEL_ARCH, hp.MODEL_SOURCE)
 
 
 def main():
@@ -147,6 +179,10 @@ def main():
 
   model_save_path = Path("models/")
   model_save_path.mkdir(exist_ok=True)
+  
+  plots_path = Path("plots/")
+  plots_path.mkdir(exist_ok=True)
+
 
   # ========== All model configurations to train ==========
   model_configs = [
@@ -176,6 +212,25 @@ def main():
     es = "YES" if r["early_stopped"] else "NO"
     print(f"{model_name} | {acc}   | {loss}   | {es}")
   print("=" * 58)
+  
+  # ========== Generate Learning Curves ==========
+  print("\n==============================================")
+  print("      Generating Learning Curves")
+  print("==============================================")
+  device = "cuda" if torch.cuda.is_available() else "cpu"
+  
+  # Define the metrics to plot
+  specificity_scorer = make_scorer(recall_score, pos_label=0)
+  scoring_metrics = {
+      'accuracy': 'accuracy',
+      'precision': 'precision_macro',
+      'recall': 'recall_macro',
+      'f1_score': 'f1_macro',
+      'specificity': specificity_scorer
+  }
+
+  for arch, source in model_configs:
+    plot_learning_curve_for_model(arch, source, data_root, device, scoring_metrics)
 
 
 if __name__ == "__main__":

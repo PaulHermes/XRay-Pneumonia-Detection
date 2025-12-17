@@ -1,5 +1,6 @@
 import kagglehub
 import os
+import random
 from pathlib import Path
 from PIL import Image
 import shutil
@@ -7,6 +8,49 @@ import torchvision.transforms as transforms
 import torch
 from . import hyperparameters as hp
 from collections import defaultdict
+
+def resplit_data(data_root: Path, val_split_ratio: float = 0.2):
+    print("Checking data split...")
+    train_dir = data_root / 'train'
+    val_dir = data_root / 'val'
+    
+    if val_dir.is_dir():
+        try:
+            val_normal_count = len(list((val_dir / 'NORMAL').iterdir()))
+            if val_normal_count > 100: # Original val set has only 8
+                print("Validation set appears to be already split. Skipping resplit.")
+                return
+        except FileNotFoundError:
+            pass 
+    val_normal_dir = val_dir / 'NORMAL'
+    val_pneumonia_dir = val_dir / 'PNEUMONIA'
+    val_normal_dir.mkdir(parents=True, exist_ok=True)
+    val_pneumonia_dir.mkdir(parents=True, exist_ok=True)
+
+    for class_name in ['NORMAL', 'PNEUMONIA']:
+        orig_val_class_dir = val_dir / class_name
+        train_class_dir = train_dir / class_name
+        if orig_val_class_dir.is_dir():
+            for img_path in orig_val_class_dir.iterdir():
+                if img_path.is_file():
+                    shutil.move(str(img_path), train_class_dir / img_path.name)
+
+    for class_name in ['NORMAL', 'PNEUMONIA']:
+        source_dir = train_dir / class_name
+        all_images = list(source_dir.glob('*.jpeg'))
+        random.shuffle(all_images)
+        
+        num_val_images = int(len(all_images) * val_split_ratio)
+        val_images = all_images[:num_val_images]
+        
+        destination_dir = val_dir / class_name
+        for img_path in val_images:
+            shutil.move(str(img_path), destination_dir / img_path.name)
+            
+        print(f"Moved {len(val_images)} images from train/{class_name} to val/{class_name}")
+
+    print("Data resplit complete.")
+
 
 def load_data():
     project_root = Path(__file__).resolve().parent.parent
@@ -46,6 +90,9 @@ def load_data():
 
     print(f"Dataset ready. Root folder with train/test/val is: {data_root}")
     
+    # Perform the data resplit
+    resplit_data(data_root)
+
     # get class counts for the training split for weighted sampling
     train_normal_count = len(list((data_root / 'train' / 'NORMAL').iterdir()))
     train_pneumonia_count = len(list((data_root / 'train' / 'PNEUMONIA').iterdir()))
