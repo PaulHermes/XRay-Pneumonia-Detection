@@ -10,26 +10,11 @@ from tqdm import tqdm
 
 from src import hyperparameters as hp
 from src.data_management import (load_data, get_train_transforms, get_val_transforms, create_training_dataset_with_sampler, PneumoniaDataset)
-from src.evaluation import plot_learning_curve_for_model, plot_training_history, generate_cam_visualizations
+from src.evaluation import plot_learning_curve_for_model, plot_training_history, generate_cam_visualizations, calculate_metrics, evaluate_on_test_set
 from src.hyperparameters import (PRETRAINED, NUM_CLASSES, BATCH_SIZE, LEARNING_RATE, NUM_EPOCHS)
 from src.model import build_model
 
 model_results = []
-
-def calculate_metrics(labels, preds):
-    accuracy = accuracy_score(labels, preds)
-    precision = precision_score(labels, preds, average='macro', zero_division=0)
-    recall = recall_score(labels, preds, average='macro', zero_division=0)
-    f1 = f1_score(labels, preds, average='macro', zero_division=0)
-    specificity = recall_score(labels, preds, pos_label=0, average='binary', zero_division=0)
-    return {
-        "accuracy": accuracy,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-        "specificity": specificity
-    }
-
 
 def train_one_epoch(model, dataloader, criterion, optimizer, device):
   model.train()
@@ -108,10 +93,24 @@ def train_and_save(model_save_path: Path, data_root: Path):
   val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
   criterion = nn.CrossEntropyLoss()
-  optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+  optimizer = torch.optim.Adam(
+      model.parameters(), 
+      lr=LEARNING_RATE,
+      weight_decay=hp.optimizer_params["weight_decay"]
+  )
+  
+  scheduler = None
+  if hp.SCHEDULER_CONFIG["enabled"]:
+      scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+          optimizer, 
+          mode=hp.SCHEDULER_CONFIG["mode"], 
+          factor=hp.SCHEDULER_CONFIG["factor"], 
+          patience=hp.SCHEDULER_CONFIG["patience"], 
+          verbose=True
+      )
 
-  best_val_acc = 0.0
-  best_val_loss = float("inf")
+  best_metric_value = -float('inf') if hp.MONITOR_MODE == 'max' else float('inf')
+  best_early_stopping_metric_value = -float('inf') if hp.MONITOR_MODE == 'max' else float('inf')
   
   history = defaultdict(list)
 
@@ -124,6 +123,9 @@ def train_and_save(model_save_path: Path, data_root: Path):
     train_metrics = train_one_epoch(model, train_loader, criterion, optimizer, device)
     val_metrics = validate(model, val_loader, criterion, device)
 
+    if scheduler:
+        scheduler.step(val_metrics[hp.SCHEDULER_CONFIG["monitor"]])
+
     # Store metrics
     for key, value in train_metrics.items():
         history[f"train_{key}"].append(value)
@@ -134,16 +136,19 @@ def train_and_save(model_save_path: Path, data_root: Path):
     print(f" Val   Loss: {val_metrics['loss']:.4f} | Val   Acc: {val_metrics['accuracy']:.4f}")
 
     # Save best model
-    if val_metrics['accuracy'] > best_val_acc:
-      best_val_acc = val_metrics['accuracy']
-      save_path = model_save_path / f"best_model_{hp.MODEL_ARCH}_{hp.MODEL_SOURCE}.pth"
-      torch.save(model.state_dict(), save_path)
-      print(f" Saved new best model → {save_path}")
+    current_metric = val_metrics[hp.MONITOR_METRIC]
+    if (hp.MONITOR_MODE == 'max' and current_metric > best_metric_value) or \
+       (hp.MONITOR_MODE == 'min' and current_metric < best_metric_value):
+        best_metric_value = current_metric
+        save_path = model_save_path / f"best_model_{hp.MODEL_ARCH}_{hp.MODEL_SOURCE}.pth"
+        torch.save(model.state_dict(), save_path)
+        print(f" Saved new best model → {save_path} (best {hp.MONITOR_METRIC}: {best_metric_value:.4f})")
 
     # Early Stopping
     if hp.EARLY_STOPPING_CONFIG.get("enabled", False):
-        if val_metrics['loss'] < best_val_loss:
-            best_val_loss = val_metrics['loss']
+        if (hp.MONITOR_MODE == 'max' and current_metric > best_early_stopping_metric_value) or \
+           (hp.MONITOR_MODE == 'min' and current_metric < best_early_stopping_metric_value):
+            best_early_stopping_metric_value = current_metric
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
@@ -161,8 +166,8 @@ def train_and_save(model_save_path: Path, data_root: Path):
   model_results.append({
     "arch": hp.MODEL_ARCH,
     "source": hp.MODEL_SOURCE,
-    "val_acc": best_val_acc,
-    "val_loss": best_val_loss,
+    "val_acc": val_metrics['accuracy'],
+    "val_loss": val_metrics['loss'],
     "early_stopped": early_stopped
   })
 
@@ -185,10 +190,11 @@ def main():
 
 
   # ========== All model configurations to train ==========
-  model_configs = [
-    ("simple_cnn", "simple_cnn"),
-    ("resnet50", "imagenet"),
-  ]
+  model_configs = []
+  if hp.TRAIN_SIMPLE_CNN:
+    model_configs.append(("simple_cnn", "simple_cnn"))
+  if hp.TRAIN_RESNET:
+    model_configs.append(("resnet50", "imagenet"))
 
   # ========== Train each model ==========
   for arch, source in model_configs:
@@ -214,23 +220,24 @@ def main():
   print("=" * 58)
   
   # ========== Generate Learning Curves ==========
-  print("\n==============================================")
-  print("      Generating Learning Curves")
-  print("==============================================")
-  device = "cuda" if torch.cuda.is_available() else "cpu"
-  
-  # Define the metrics to plot
-  specificity_scorer = make_scorer(recall_score, pos_label=0)
-  scoring_metrics = {
-      'accuracy': 'accuracy',
-      'precision': 'precision_macro',
-      'recall': 'recall_macro',
-      'f1_score': 'f1_macro',
-      'specificity': specificity_scorer
-  }
+  if hp.PLOT_LEARNING_CURVES:
+    print("\n==============================================")
+    print("      Generating Learning Curves")
+    print("==============================================")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Define the metrics to plot
+    specificity_scorer = make_scorer(recall_score, pos_label=0)
+    scoring_metrics = {
+        'accuracy': 'accuracy',
+        'precision': 'precision_macro',
+        'recall': 'recall_macro',
+        'f1_score': 'f1_macro',
+        'specificity': specificity_scorer
+    }
 
-  for arch, source in model_configs:
-    plot_learning_curve_for_model(arch, source, data_root, device, scoring_metrics)
+    for arch, source in model_configs:
+      plot_learning_curve_for_model(arch, source, data_root, device, scoring_metrics)
 
   # ========== Generate CAM Visualizations ==========
   if hp.CAM.get("USE_CAM", False):
@@ -239,6 +246,13 @@ def main():
     print("==============================================")
     for arch, source in model_configs:
       generate_cam_visualizations(arch, source, data_root, device)
+
+  # ========== Test Set Evaluation ==========
+  print("\n==============================================")
+  print("      Test Set Evaluation")
+  print("==============================================")
+  for arch, source in model_configs:
+    evaluate_on_test_set(arch, source, data_root, device)
 
 if __name__ == "__main__":
   main()

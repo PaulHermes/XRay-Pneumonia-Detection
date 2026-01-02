@@ -1,4 +1,8 @@
 # Model Hyperparameters
+TRAIN_SIMPLE_CNN = True
+TRAIN_RESNET = True
+PLOT_LEARNING_CURVES = True
+
 MODEL_ARCH = "simple_cnn" # "simple_cnn" or "resnet50"
 MODEL_SOURCE = "simple_cnn" # "imagenet" or "hf_pretrained" or "simple_cnn"
 HF_MODEL_PATH = "ryefoxlime/PneumoniaDetection"
@@ -6,11 +10,22 @@ PRETRAINED = True # Use pretrained weights from source
 NUM_CLASSES = 2
 
 # Training Hyperparameters
-BATCH_SIZE = 64 # can probably try to go to 128 since that is what Learning Curve defaults to
+BATCH_SIZE = 64
 LEARNING_RATE = 0.001
 NUM_EPOCHS = 10
+MONITOR_METRIC = 'f1'
+MONITOR_MODE = 'max' # 'min' or 'max'
+
 optimizer_params = {
     "weight_decay": 0.0001
+}
+
+SCHEDULER_CONFIG = {
+    "enabled": True,
+    "factor": 0.1,
+    "patience": 2,
+    "monitor": "loss",
+    "mode": "min"
 }
 
 # Data Hyperparameters
@@ -49,8 +64,8 @@ EARLY_STOPPING_CONFIG = {
 CAM = {
     "USE_CAM": True,
     "TARGET_LAYER_MAP": {
-        "simple_cnn": "features[3]", # Corresponds to the last Conv2d layer
-        "resnet50": "layer4[2].conv3"
+        "simple_cnn": ["features[3]"], # Corresponds to the last Conv2d layer
+        "resnet50": ["layer1[-1]", "layer2[-1]", "layer3[-1]", "layer4[-1]"]
     },
     "OUTPUT_DIR": "cam_visualizations",
     "NUM_IMAGES": 10

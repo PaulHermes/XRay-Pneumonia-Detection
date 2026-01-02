@@ -21,7 +21,7 @@ class GradCAM:
             self.gradients = grad_out[0].detach()
 
         self.target_layer.register_forward_hook(forward_hook)
-        self.target_layer.register_backward_hook(backward_hook)
+        self.target_layer.register_full_backward_hook(backward_hook)
 
     def _get_cam_weights(self, grads):
         return torch.mean(grads, dim=[2, 3], keepdim=True)
@@ -35,6 +35,9 @@ class GradCAM:
 
         self.model.zero_grad()
         output[:, class_idx].backward()
+
+        if self.gradients is None or self.feature_maps is None:
+            raise RuntimeError()
 
         weights = self._get_cam_weights(self.gradients)
         cam = torch.sum(weights * self.feature_maps, dim=1, keepdim=True)

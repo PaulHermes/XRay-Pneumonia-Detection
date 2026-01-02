@@ -1,28 +1,18 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-from sklearn.model_selection import learning_curve
-from sklearn.metrics import make_scorer, recall_score
-from skorch import NeuralNetClassifier
-
-from src import hyperparameters as hp
-from src.model import build_model
-from src.data_management import PneumoniaDataset, get_train_transforms
-
-import numpy as np
-import matplotlib.pyplot as plt
-import torch
-from sklearn.model_selection import StratifiedKFold, cross_validate
-from sklearn.metrics import make_scorer, recall_score
+from sklearn.model_selection import learning_curve, StratifiedKFold, cross_validate
+from sklearn.metrics import make_scorer, recall_score, confusion_matrix, accuracy_score, precision_score, f1_score
 from skorch import NeuralNetClassifier
 from collections import defaultdict
+import os
+import seaborn as sns
+import json
+from torch.utils.data import DataLoader
 
 from src import hyperparameters as hp
 from src.model import build_model
-from src.data_management import PneumoniaDataset, get_train_transforms
-
-import os
-from src.data_management import get_val_transforms
+from src.data_management import PneumoniaDataset, get_train_transforms, get_val_transforms, load_data, get_weighted_sampler
 from src.cam import generate_cam_image
 
 def plot_learning_curve_for_model(model_arch, model_source, data_root, device, scoring_metrics):
@@ -47,18 +37,25 @@ def plot_learning_curve_for_model(model_arch, model_source, data_root, device, s
     # 2. Load data
     train_transforms = get_train_transforms()
     train_dataset = PneumoniaDataset(data_root, transform=train_transforms, split='train')
-    X = np.array([item[0].numpy() for item in train_dataset])
-    y = np.array([item[1] for item in train_dataset])
     
+    X_all = np.array([item[0].numpy() for item in train_dataset])
+    y_all = np.array([item[1] for item in train_dataset])
+    
+    sampler = get_weighted_sampler(train_dataset)
+
     # 3. Define training sizes and results storage
-    train_sizes_abs = np.linspace(int(0.1 * len(X)), len(X), 5, dtype=int)
+    train_sizes_abs = np.linspace(int(0.1 * len(X_all)), len(X_all), 5, dtype=int)
     results = defaultdict(lambda: defaultdict(list))
     
     # 4. Iterate over training sizes and compute all metrics at once
     for i, n_samples in enumerate(train_sizes_abs):
         print(f"  - [{i+1}/{len(train_sizes_abs)}] Training on {n_samples} samples...")
         
-        X_subset, y_subset = X[:n_samples], y[:n_samples]
+        # Generate a subset of indices using the weighted sampler
+        sampler_iter = iter(sampler)
+        subset_indices = [next(sampler_iter) for _ in range(n_samples)]
+        
+        X_subset, y_subset = X_all[subset_indices], y_all[subset_indices]
 
         cv = StratifiedKFold(n_splits=3)
 
@@ -81,7 +78,7 @@ def plot_learning_curve_for_model(model_arch, model_source, data_root, device, s
     # 5. Plot results for each metric
     print("\nFinished calculations. Generating plots...")
     actual_train_sizes = [len(r['train_mean']) for r in results.values()][0]
-    train_sizes_proportions = train_sizes_abs[:actual_train_sizes] / len(X)
+    train_sizes_proportions = train_sizes_abs[:actual_train_sizes] / len(X_all)
 
     for metric_name, data in results.items():
         plt.figure(figsize=(10, 6))
@@ -153,25 +150,15 @@ def generate_cam_visualizations(model_arch, model_source, data_root, device):
     val_transforms = get_val_transforms()
     val_dataset = PneumoniaDataset(data_root, transform=val_transforms, split='val')
     
-    # 4. Get target layer
-    target_layer_name = hp.CAM["TARGET_LAYER_MAP"].get(model_arch)
-    if not target_layer_name:
+    # 4. Get target layers
+    target_layer_names = hp.CAM["TARGET_LAYER_MAP"].get(model_arch)
+    if not target_layer_names:
         print(f"Warning: No target layer specified for model '{model_arch}' in hyperparameters. Skipping CAM generation.")
         return
         
-    # Access the layer using its string name
-    try:
-        target_layer = model
-        for name in target_layer_name.split('.'):
-            if name.endswith(']'):
-                name, index = name[:-1].split('[')
-                target_layer = getattr(target_layer, name)
-                target_layer = target_layer[int(index)]
-            else:
-                target_layer = getattr(target_layer, name)
-    except AttributeError:
-        print(f"Error: Could not find target layer '{target_layer_name}' in model '{model_arch}'. Skipping CAM generation.")
-        return
+    # Ensure it's a list
+    if isinstance(target_layer_names, str):
+        target_layer_names = [target_layer_names]
 
     # 5. Generate and save CAM images
     num_images_per_class = hp.CAM["NUM_IMAGES"] // 2
@@ -185,17 +172,147 @@ def generate_cam_visualizations(model_arch, model_source, data_root, device):
             break
             
     image_indices = class_indices[0] + class_indices[1]
+    for layer_name_str in target_layer_names:
+        try:
+            target_layer = model
+            for name in layer_name_str.split('.'):
+                if name.endswith(']'):
+                    name, index = name[:-1].split('[')
+                    target_layer = getattr(target_layer, name)
+                    target_layer = target_layer[int(index)]
+                else:
+                    target_layer = getattr(target_layer, name)
+        except (AttributeError, IndexError) as e:
+            print(f"Error: Could not find target layer '{layer_name_str}' in model '{model_arch}': {e}. Skipping.")
+            continue
+            
+        print(f"  - Generating CAMs for layer: {layer_name_str}")
 
-    for i, img_idx in enumerate(image_indices):
-        input_tensor, label = val_dataset[img_idx]
-        input_tensor = input_tensor.to(device)
+        for i, img_idx in enumerate(image_indices):
+            input_tensor, label = val_dataset[img_idx]
+            input_tensor = input_tensor.to(device)
 
-        overlay, pred_idx = generate_cam_image(model, target_layer, input_tensor)
+            overlay, pred_idx = generate_cam_image(model, target_layer, input_tensor)
 
-        actual_label = "Pneumonia" if label == 1 else "Normal"
-        pred_label = "Pneumonia" if pred_idx == 1 else "Normal"
-        
-        filename = f"{model_arch}_{model_source}_img{i}_actual-{actual_label}_pred-{pred_label}.png"
-        save_path = os.path.join(output_dir, filename)
-        overlay.save(save_path)
-        print(f"  - Saved CAM visualization to {save_path}")
+            actual_label = "Pneumonia" if label == 1 else "Normal"
+            pred_label = "Pneumonia" if pred_idx == 1 else "Normal"
+            
+            sanitized_layer = layer_name_str.replace('[', '_').replace(']', '').replace('.', '_')
+            
+            filename = f"{model_arch}_{model_source}_{sanitized_layer}_img{i}_actual-{actual_label}_pred-{pred_label}.png"
+            save_path = os.path.join(output_dir, filename)
+            overlay.save(save_path)
+
+def calculate_metrics(labels, preds):
+    accuracy = accuracy_score(labels, preds)
+    precision = precision_score(labels, preds, average='macro', zero_division=0)
+    recall = recall_score(labels, preds, average='macro', zero_division=0)
+    f1 = f1_score(labels, preds, average='macro', zero_division=0)
+    specificity = recall_score(labels, preds, pos_label=0, average='binary', zero_division=0)
+    return {
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "specificity": specificity
+    }
+
+def plot_confusion_matrix(y_true, y_pred, model_arch, model_source, output_dir):
+    cm = confusion_matrix(y_true, y_pred)
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Normal', 'Pneumonia'], yticklabels=['Normal', 'Pneumonia'])
+    plt.xlabel('Predicted Label')
+    plt.ylabel('True Label')
+    plt.title(f'Confusion Matrix for {model_arch} ({model_source})')
+    plot_path = os.path.join(output_dir, f'confusion_matrix_{model_arch}_{model_source}.png')
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"  - Confusion matrix saved to {plot_path}")
+
+def evaluate_on_test_set(model_arch, model_source, data_root, device):
+    print(f"\nEvaluating on test set for {model_arch}/{model_source}...")
+
+    # 1. Setup output directory
+    output_dir = "reports"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 2. Build and load the best model
+    hp.MODEL_ARCH = model_arch
+    hp.MODEL_SOURCE = model_source
+    model = build_model(pretrained=False, num_classes=hp.NUM_CLASSES)
+    model_path = f'models/best_model_{model_arch}_{model_source}.pth'
+    try:
+        model.load_state_dict(torch.load(model_path, map_location=device))
+    except RuntimeError as e:
+        if "features" in str(e) and "conv" in str(e):
+            print("  - Detected state_dict key mismatch. Trying to load from converted model...")
+            model_path = f'models/best_model_{model_arch}_{model_source}_converted.pth'
+            try:
+                model.load_state_dict(torch.load(model_path, map_location=device))
+            except FileNotFoundError:
+                print(f"  - Error: Converted model not found at {model_path}.")
+                print("  - Please run the conversion script first.")
+                return
+        else:
+            raise e
+            
+    model.to(device)
+    model.eval()
+
+    # 3. Get test data
+    test_transforms = get_val_transforms() # Use validation transforms for test set
+    test_dataset = PneumoniaDataset(data_root, transform=test_transforms, split='test')
+    test_loader = DataLoader(test_dataset, batch_size=hp.BATCH_SIZE, shuffle=False)
+
+    # 4. Get predictions
+    all_preds, all_labels = [], []
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)
+            if isinstance(outputs, dict):
+                outputs = outputs["logits"]
+            _, preds = torch.max(outputs, 1)
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+
+    # 5. Calculate and save metrics
+    metrics = calculate_metrics(all_labels, all_preds)
+    print("  - Test Metrics:")
+    for key, value in metrics.items():
+        print(f"    - {key.capitalize()}: {value:.4f}")
+
+    # 6. Save metrics to a file
+    report = {
+        "model": f"{model_arch}_{model_source}",
+        "metrics": metrics
+    }
+    report_path = os.path.join(output_dir, f'test_report_{model_arch}_{model_source}.json')
+    with open(report_path, 'w') as f:
+        json.dump(report, f, indent=4)
+    print(f"  - Test report saved to {report_path}")
+
+    # 7. Plot and save confusion matrix
+    plot_confusion_matrix(all_labels, all_preds, model_arch, model_source, output_dir)
+
+def run_test_evaluation():
+    print("Evaluating pre-trained models on the test set...")
+    
+    data_info = load_data()
+    data_root = data_info["data_root"]
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    model_configs = [
+        ("simple_cnn", "simple_cnn"),
+        ("resnet50", "imagenet"),
+    ]
+
+    print("\n==============================================")
+    print("      Test Set Evaluation")
+    print("==============================================")
+    for arch, source in model_configs:
+        evaluate_on_test_set(arch, source, data_root, device)
+
+if __name__ == "__main__":
+    run_test_evaluation()
+
