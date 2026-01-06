@@ -219,12 +219,13 @@ def main():
     print(f"{model_name} | {acc}   | {loss}   | {es}")
   print("=" * 58)
   
+  device = "cuda" if torch.cuda.is_available() else "cpu"
+
   # ========== Generate Learning Curves ==========
   if hp.PLOT_LEARNING_CURVES:
     print("\n==============================================")
     print("      Generating Learning Curves")
     print("==============================================")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # Define the metrics to plot
     specificity_scorer = make_scorer(recall_score, pos_label=0)

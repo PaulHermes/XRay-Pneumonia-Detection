@@ -12,6 +12,8 @@ NUM_CLASSES = 2
 # Training Hyperparameters
 BATCH_SIZE = 64
 LEARNING_RATE = 0.001
+DROPOUT_ENABLED = True
+DROPOUT_RATE = 0.5
 NUM_EPOCHS = 10
 MONITOR_METRIC = 'f1'
 MONITOR_MODE = 'max' # 'min' or 'max'

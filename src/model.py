@@ -35,7 +35,14 @@ def build_model(pretrained: bool = hp.PRETRAINED, num_classes: int = hp.NUM_CLAS
 
             model = models.resnet50(weights=weights)
             num_ftrs = model.fc.in_features
-            model.fc = nn.Linear(num_ftrs, num_classes) # Adjust for hp.NUM_CLASSES
+            
+            if hp.DROPOUT_ENABLED:
+                model.fc = nn.Sequential(
+                    nn.Dropout(p=hp.DROPOUT_RATE),
+                    nn.Linear(num_ftrs, num_classes)
+                )
+            else:
+                model.fc = nn.Linear(num_ftrs, num_classes)
         elif hp.MODEL_SOURCE == "hf_pretrained":
             # Load the model from Hugging Face
             model = AutoModelForImageClassification.from_pretrained(hp.HF_MODEL_PATH)
