@@ -1,21 +1,24 @@
 [project]
 name = "x-ray-pneumonia-detection"
 version = "0.1.0"
-description = "Add your description here"
+description = "Chest X-Ray CNN for Pneumonia Classification"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "kagglehub>=0.3.13",
-    "pandas",
-    "Pillow",
-    "matplotlib",
-    "ipykernel",
-    "seaborn",
-    "scikit-learn",
-    "torch==2.5.1+cu121",
-    "torchvision==0.20.1+cu121",
-    "torchaudio==2.5.1+cu121",
-    "transformers",
-    "timm",
-    "skorch",
+  "kagglehub>=0.3.13",
+  "pandas",
+  "Pillow",
+  "matplotlib",
+  "ipykernel",
+  "scikit-learn",
+  "transformers",
+  "timm",
+  "skorch",
+  "nn>=0.1.1",
+]
+
+[tool.uv]
+required-environments = [
+  "sys_platform == 'darwin' and platform_machine == 'x86_64'",
+  "sys_platform == 'linux'",
 ]
