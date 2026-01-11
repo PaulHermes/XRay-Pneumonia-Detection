@@ -183,14 +183,17 @@ class PneumoniaDataset(torch.utils.data.Dataset):
 
     def _make_dataset(self):
         instances = []
-        for class_name in self.classes:
-            class_dir = self.root_dir / self.split / class_name
-            if not class_dir.is_dir():
-                continue
-            for img_path in class_dir.iterdir():
-                if img_path.suffix.lower() == '.jpeg':
-                    label = self.class_to_idx[class_name]
-                    instances.append((str(img_path), label))
+        splits = [self.split] if isinstance(self.split, str) else self.split
+        
+        for sp in splits:
+            for class_name in self.classes:
+                class_dir = self.root_dir / sp / class_name
+                if not class_dir.is_dir():
+                    continue
+                for img_path in class_dir.iterdir():
+                    if img_path.suffix.lower() == '.jpeg':
+                        label = self.class_to_idx[class_name]
+                        instances.append((str(img_path), label))
         return instances
 
     def __len__(self):
@@ -211,10 +214,10 @@ def get_weighted_sampler(dataset: PneumoniaDataset) -> torch.utils.data.Weighted
     num_samples = len(dataset)
     weights = [0] * num_samples
     
-    class_weights = {
-        0: num_samples / (2 * class_counts[0]), # Weight for NORMAL
-        1: num_samples / (2 * class_counts[1])  # Weight for PNEUMONIA
-    }
+    class_weights = {}
+    for label in [0, 1]:
+        count = class_counts[label]
+        class_weights[label] = num_samples / (2 * count) if count > 0 else 0
 
     for idx, (_, label) in enumerate(dataset.samples):
         weights[idx] = class_weights[label]
@@ -229,5 +232,11 @@ def get_weighted_sampler(dataset: PneumoniaDataset) -> torch.utils.data.Weighted
 def create_training_dataset_with_sampler(data_root: Path):
     train_transforms = get_train_transforms()
     train_dataset = PneumoniaDataset(data_root, transform=train_transforms, split='train')
+    train_sampler = get_weighted_sampler(train_dataset)
+    return train_dataset, train_sampler
+
+def create_combined_training_dataset_with_sampler(data_root: Path):
+    train_transforms = get_train_transforms()
+    train_dataset = PneumoniaDataset(data_root, transform=train_transforms, split=['train', 'val'])
     train_sampler = get_weighted_sampler(train_dataset)
     return train_dataset, train_sampler

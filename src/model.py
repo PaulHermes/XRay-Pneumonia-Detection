@@ -25,6 +25,23 @@ class SimpleCNN(nn.Module):
         x = self.fc1(x)
         return x
 
+def add_dropout_to_resnet(model: nn.Module, inner_prob: float, fc_prob: float):
+    if hasattr(model, 'fc'):
+        model.fc = nn.Sequential(
+            nn.Dropout(p=fc_prob),
+            model.fc
+        )
+
+    for layer_name in ['layer1', 'layer2', 'layer3', 'layer4']:
+        layer = getattr(model, layer_name)
+        if isinstance(layer, nn.Sequential):
+            new_layer_list = []
+            for child in layer:
+                new_layer_list.append(child)
+                new_layer_list.append(nn.Dropout(p=inner_prob))
+            
+            setattr(model, layer_name, nn.Sequential(*new_layer_list))
+
 def build_model(pretrained: bool = hp.PRETRAINED, num_classes: int = hp.NUM_CLASSES) -> nn.Module:
     if hp.MODEL_ARCH == "resnet50":
         if hp.MODEL_SOURCE == "imagenet":
@@ -34,15 +51,16 @@ def build_model(pretrained: bool = hp.PRETRAINED, num_classes: int = hp.NUM_CLAS
                 weights = None
 
             model = models.resnet50(weights=weights)
-            num_ftrs = model.fc.in_features
+            num_ftrs = model.fc.in_features    
+            model.fc = nn.Linear(num_ftrs, num_classes)
             
-            if hp.DROPOUT_ENABLED:
-                model.fc = nn.Sequential(
-                    nn.Dropout(p=hp.DROPOUT_RATE),
-                    nn.Linear(num_ftrs, num_classes)
+            if hp.DROPOUT_CONFIG["enabled"]:
+                add_dropout_to_resnet(
+                    model, 
+                    inner_prob=hp.DROPOUT_CONFIG["inner_prob"],
+                    fc_prob=hp.DROPOUT_CONFIG["fc_prob"]
                 )
-            else:
-                model.fc = nn.Linear(num_ftrs, num_classes)
+                
         elif hp.MODEL_SOURCE == "hf_pretrained":
             # Load the model from Hugging Face
             model = AutoModelForImageClassification.from_pretrained(hp.HF_MODEL_PATH)

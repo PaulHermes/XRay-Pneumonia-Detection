@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src import hyperparameters as hp
-from src.data_management import (load_data, get_train_transforms, get_val_transforms, create_training_dataset_with_sampler, PneumoniaDataset)
+from src.data_management import (load_data, get_train_transforms, get_val_transforms, create_training_dataset_with_sampler, create_combined_training_dataset_with_sampler, PneumoniaDataset)
 from src.evaluation import plot_learning_curve_for_model, plot_training_history, generate_cam_visualizations, calculate_metrics, evaluate_on_test_set
 from src.hyperparameters import (PRETRAINED, NUM_CLASSES, BATCH_SIZE, LEARNING_RATE, NUM_EPOCHS)
 from src.model import build_model
@@ -86,8 +86,13 @@ def train_and_save(model_save_path: Path, data_root: Path):
 
   model = build_model(pretrained=PRETRAINED, num_classes=NUM_CLASSES).to(device)
 
-  train_dataset, train_sampler = create_training_dataset_with_sampler(data_root)
-  val_dataset = PneumoniaDataset(data_root, transform=get_val_transforms(), split="val")
+  if hp.TRAIN_ON_ALL_DATA:
+      print("Training on ALL data (Train + Validation)")
+      train_dataset, train_sampler = create_combined_training_dataset_with_sampler(data_root)
+      val_dataset = PneumoniaDataset(data_root, transform=get_val_transforms(), split="test")
+  else:
+      train_dataset, train_sampler = create_training_dataset_with_sampler(data_root)
+      val_dataset = PneumoniaDataset(data_root, transform=get_val_transforms(), split="val")
 
   train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=train_sampler)
   val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)

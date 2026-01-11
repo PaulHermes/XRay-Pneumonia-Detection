@@ -1,20 +1,19 @@
 # Model Hyperparameters
-TRAIN_SIMPLE_CNN = True
+TRAIN_ON_ALL_DATA = True 
+TRAIN_SIMPLE_CNN = False
 TRAIN_RESNET = True
-PLOT_LEARNING_CURVES = True
+PLOT_LEARNING_CURVES = False
 
-MODEL_ARCH = "simple_cnn" # "simple_cnn" or "resnet50"
-MODEL_SOURCE = "simple_cnn" # "imagenet" or "hf_pretrained" or "simple_cnn"
+MODEL_ARCH = "resnet50" # "simple_cnn" or "resnet50"
+MODEL_SOURCE = "imagenet" # "imagenet" or "hf_pretrained" or "simple_cnn"
 HF_MODEL_PATH = "ryefoxlime/PneumoniaDetection"
 PRETRAINED = True # Use pretrained weights from source
 NUM_CLASSES = 2
 
 # Training Hyperparameters
 BATCH_SIZE = 64
-LEARNING_RATE = 0.001
-DROPOUT_ENABLED = True
-DROPOUT_RATE = 0.5
-NUM_EPOCHS = 10
+LEARNING_RATE = 0.00001
+NUM_EPOCHS = 30
 MONITOR_METRIC = 'f1'
 MONITOR_MODE = 'max' # 'min' or 'max'
 
@@ -26,8 +25,8 @@ SCHEDULER_CONFIG = {
     "enabled": True,
     "factor": 0.1,
     "patience": 2,
-    "monitor": "loss",
-    "mode": "min"
+    "monitor": "f1",
+    "mode": "max"
 }
 
 # Data Hyperparameters
@@ -54,6 +53,13 @@ AUGMENTATION_CONFIG = {
     "affine": {"enabled": True, "translate": (0.05, 0.05), "scale": (0.95, 1.05)},
     "horizontal_flip": {"enabled": False, "p": 0.5},
     "color_jitter": {"enabled": True, "brightness": 0.1, "contrast": 0.1},
+}
+
+# Dropout Hyperparameters
+DROPOUT_CONFIG = {
+    "enabled": True,
+    "fc_prob": 0.5, # final layer
+    "inner_prob": 0.05 # for inner layers
 }
 
 # Early Stopping Hyperparameters

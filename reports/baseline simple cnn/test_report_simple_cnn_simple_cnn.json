@@ -1,0 +1,10 @@
+{
+    "model": "simple_cnn_simple_cnn",
+    "metrics": {
+        "accuracy": 0.7948717948717948,
+        "precision": 0.8608875128998967,
+        "recall": 0.72991452991453,
+        "f1": 0.7449808429118774,
+        "specificity": 0.4700854700854701
+    }
+}
